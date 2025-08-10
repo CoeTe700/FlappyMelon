@@ -10,7 +10,7 @@
     html,body{height:100%}
     body{margin:0;background:linear-gradient(180deg,#0b1020 0%, #152348 70%, #1a2a55 100%);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial,sans-serif;overflow:hidden}
     #game{position:fixed;inset:0;display:block}
-    .hud{position:fixed;inset:0;z-index:10;}
+    .hud{position:fixed;inset:0;z-index:10}
     .scoreLive{position:absolute;top:14px;left:14px;background:rgba(0,0,0,.35);backdrop-filter:blur(4px);padding:.5rem .75rem;border-radius:12px;font-weight:700;letter-spacing:.5px}
     .badge{display:inline-flex;align-items:center;gap:.4rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);padding:.25rem .5rem;border-radius:999px;font-size:.8rem;color:var(--muted)}
     .screen{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -31,7 +31,7 @@
     .tiny{font-size:.8rem;color:var(--muted)}
     .hidden{display:none}
     .center{text-align:center}
-      .byline{font-weight:700;font-size:clamp(.9rem,2.2vw,1.1rem);color:var(--muted);margin-left:.5rem;white-space:nowrap}
+    .byline{font-weight:700;font-size:clamp(.9rem,2.2vw,1.1rem);color:var(--muted);margin-left:.5rem;white-space:nowrap}
   </style>
 </head>
 <body>
@@ -49,17 +49,21 @@
         <h1>Flappy <span style="color:#9efc86">Melón</span> <span class="byline">por Coeto Games 🚀</span></h1>
         <p>Mantén al melón con alas en el aire y pasa entre columnas de botellines. Partidas de 30–60s. ¡Fácil de aprender, cab*** de dominar!</p>
         <div class="row">
-          <button id="btnStart" class="grow" type="button">Jugar</button>
+          <button id="btnStart" class="grow" type="button" data-action="start">Jugar</button>
           <button id="btnHow" class="ghost" type="button">Cómo jugar</button>
         </div>
         <div id="how" class="hidden">
           <p>Controles: pulsa para subir (o barra espaciadora). Ganas +1 punto por cada par de botellines superado. Chocar con un botellín o el suelo = game over.</p>
-          <p class="tiny">Consejo: los near‑miss (pasar muy justo) no dan puntos extra… pero sí respeto.</p>
+          <p class="tiny">Consejo: los near-miss (pasar muy justo) no dan puntos extra… pero sí respeto.</p>
         </div>
         <hr style="border-color:rgba(255,255,255,.1)">
         <div>
           <strong>Ranking local (top 10)</strong>
           <ol id="lbHome"></ol>
+        </div>
+        <div style="margin-top:.5rem">
+          <strong>Ranking global (top 10)</strong>
+          <ol id="lbGlobalHome"></ol>
         </div>
       </div>
     </div>
@@ -79,135 +83,190 @@
         <div style="margin-top:1rem">
           <strong>Ranking local (top 10)</strong>
           <ol id="lbList"></ol>
-          <p class="tiny">El ranking se guarda en este dispositivo. Para un ranking compartido de evento, te dejo un hook para Supabase en el código (opcional).
-          </p>
+          <div style="margin-top:.5rem">
+            <strong>Ranking global (top 10)</strong>
+            <ol id="lbGlobal"></ol>
+          </div>
+          <p class="tiny">El ranking local se guarda en este dispositivo. El ranking global usa Supabase (free tier).</p>
         </div>
       </div>
     </div>
   </div>
 
   <script>
-  (() => {
-    const canvas = document.getElementById('game');
-    const ctx = canvas.getContext('2d');
-    const $ = (id) => document.getElementById(id);
-    const $ready = $('screen-ready');
-    const $over = $('screen-over');
-    const $scoreLive = $('scoreLive');
-    const $finalScore = $('finalScore');
-    const $bestScore = $('bestScore');
-    const $lbHome = $('lbHome');
-    const $lbList = $('lbList');
-    const $playerName = $('playerName');
-    const $roomLabel = $('roomLabel');
+  (function(){
+    'use strict';
 
-    const params = new URLSearchParams(location.search);
-    const ROOM = (params.get('room') || 'default').toLowerCase();
-    $roomLabel.textContent = ROOM;
-
-    const LB_KEY = `flapmelon_lb_${ROOM}`;
-    const NAME_KEY = `flapmelon_name_${ROOM}`;
-
-    let W = 0, H = 0, DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    let GROUND_H = 0;
-    let UNIT = 1;
-
-    function resize() {
-      W = window.innerWidth; H = window.innerHeight;
-      DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-      canvas.width = Math.floor(W * DPR);
-      canvas.height = Math.floor(H * DPR);
-      canvas.style.width = W + 'px';
-      canvas.style.height = H + 'px';
-      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      UNIT = Math.max(0.7, Math.min(1.4, Math.min(W, H) / 900));
-      GROUND_H = 80 * UNIT;
-    }
-    resize();
-    window.addEventListener('resize', () => { resize(); if(state!==STATE.PLAYING) draw(); });
-
-    const STATE = { READY:0, PLAYING:1, OVER:2 };
-    let state = STATE.READY;
-
-    const player = {
-      x: 0, y: 0, r: 18, vy: 0, rot: 0, wingT: 0, lastFlapT: 0, flapCombo: 0,
-      reset(){
-        this.x = W*0.3; this.y = H*0.45; this.vy = 0; this.rot = 0; this.r = 18*UNIT; this.flapCombo = 0; this.lastFlapT = 0;
-      },
-      flap(now){
-        const t = (typeof now==='number' ? now : performance.now());
-        if (t - this.lastFlapT <= COMBO_WINDOW*1000) this.flapCombo = Math.min(this.flapCombo + 1, MAX_COMBO);
-        else this.flapCombo = 0;
-        this.lastFlapT = t;
-        this.vy = FLAP_BASE + this.flapCombo * FLAP_STEP;
-      },
-      update(dt){ this.vy += GRAV * dt; this.y += this.vy; this.rot = Math.atan2(this.vy, 200*UNIT); this.wingT += dt*10; },
-      draw(){ drawMelonWithWings(this.x, this.y, this.r, this.wingT, this.rot); }
-    };
-
-    const pipes = [];
-    let PIPE_W = 64, PIPE_GAP = 240, PIPE_SPD = 180, PIPE_SPACING = 300;
-
-    let FLAP_BASE = -3.9*UNIT, FLAP_STEP = -1.2*UNIT, MAX_COMBO = 3;
-    const COMBO_WINDOW = 0.45, COMBO_RESET = 0.55;
-    let GRAV = 18*UNIT;
-
-    function tuneByScale(){ PIPE_W = 64*UNIT; PIPE_GAP = 240*UNIT; PIPE_SPD = 180*UNIT; PIPE_SPACING = 300*UNIT; GRAV = 18*UNIT; FLAP_BASE = -3.9*UNIT; FLAP_STEP = -1.2*UNIT; player.r = 18*UNIT; }
-    tuneByScale();
-
-    function resetPipes(){ pipes.length = 0; let x = W*1.1; for(let i=0;i<4;i++){ const gapY = randBetween(H*0.28, H*0.72); pipes.push({x, gapY, scored:false}); x += PIPE_SPACING; } }
-    function addPipeAt(x){ const gapY = randBetween(H*0.28, H*0.72); pipes.push({x, gapY, scored:false}); }
-
-    let score = 0; let best = Number(localStorage.getItem(`flapmelon_best_${ROOM}`) || 0);
-    let lastT = performance.now();
-
-    function onPress(){ if(state===STATE.READY){ start(); } else if(state===STATE.PLAYING){ player.flap(performance.now()); } }
-    window.addEventListener('pointerdown', (e)=>{ const el=e.target; if(el && el.closest && el.closest('.panel')) return; onPress(); });
-    window.addEventListener('keydown', (e)=>{ if(['Space','ArrowUp','KeyW'].includes(e.code)){ e.preventDefault(); onPress(); } if(state===STATE.OVER && e.code==='Enter'){ saveScore(); } });
-
-    function tick(now){ const dt = Math.min(0.032, (now - lastT) / 1000); lastT = now; if(state===STATE.PLAYING){ update(dt); draw(); requestAnimationFrame(tick); } else { draw(); requestAnimationFrame(tick); } }
-    function start(){ state = STATE.PLAYING; hide($ready); hide($over); resize(); tuneByScale(); player.reset(); resetPipes(); score = 0; updateScoreHUD(); }
-    function gameOver(){ state = STATE.OVER; show($over); hide($ready); $finalScore.textContent = String(score); if(score>best){ best=score; localStorage.setItem(`flapmelon_best_${ROOM}`, String(best)); } $bestScore.textContent = String(best); $playerName.value = localStorage.getItem(NAME_KEY) || ''; renderLB(); setTimeout(() => { $playerName.focus(); }, 50); }
-
-    function update(dt){ player.update(dt); for(const p of pipes){ p.x -= PIPE_SPD*dt; } if(pipes.length && pipes[0].x + PIPE_W < -20){ pipes.shift(); const last = pipes[pipes.length-1]; addPipeAt(last.x + PIPE_SPACING); } for(const p of pipes){ if(!p.scored && player.x > p.x + PIPE_W){ p.scored = true; score++; updateScoreHUD(); } } if(checkCollision()) { gameOver(); } if(player.y + player.r >= H - GROUND_H){ player.y = H - GROUND_H - player.r; gameOver(); } }
-    function updateScoreHUD(){ $scoreLive.textContent = `Puntos: ${score}`; }
-
-    function draw(){ ctx.clearRect(0,0,W,H); drawBackground(); drawGround(); for(const p of pipes){ drawColumn(p.x, 0, PIPE_W, p.gapY - PIPE_GAP/2, true); drawColumn(p.x, p.gapY + PIPE_GAP/2, PIPE_W, (H - GROUND_H) - (p.gapY + PIPE_GAP/2), false); } player.draw(); }
-
-    function drawBackground(){ ctx.save(); ctx.globalAlpha = 0.15; const step = 64*UNIT; for(let y=step; y<H; y+=step){ for(let x=step; x<W; x+=step){ ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, 1, 1); } } ctx.restore(); }
-    function drawGround(){ const y = H - GROUND_H; ctx.fillStyle = '#0e1a34'; ctx.fillRect(0, y, W, GROUND_H); ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.moveTo(0, y+0.5); ctx.lineTo(W, y+0.5); ctx.stroke(); }
-
-    function drawColumn(x, y, w, h, top){ if(h<=0) return; ctx.save(); ctx.fillStyle = '#17325e'; ctx.fillRect(x, y, w, h); const padX = Math.max(4*UNIT, w*0.12); const padY = Math.max(4*UNIT, h*0.06); const bx = x + padX, by = y + padY; const bw = Math.max(12*UNIT, w - padX*2); const bh = Math.max(24*UNIT, h - padY*2); drawBottleInRect(bx, by, bw, bh, top); ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.strokeRect(x+0.5, y+0.5, w-1, h-1); ctx.restore(); }
-    function drawBottleInRect(x, y, w, h, invert){ ctx.save(); ctx.translate(x + w/2, y + h/2); if(invert){ ctx.rotate(Math.PI); } const BW = w, BH = h; const neckH = BH*0.28, bodyH = BH - neckH; const neckW = BW*0.42, bodyW = BW*0.72; ctx.fillStyle = '#f2c14e'; roundRect(ctx, -bodyW/2, -BH/2 + neckH, bodyW, bodyH, Math.max(4*UNIT, BW*0.08), true, false); ctx.fillStyle = '#d4a64c'; roundRect(ctx, -neckW/2, -BH/2, neckW, neckH, Math.max(3*UNIT, BW*0.06), true, false); ctx.fillStyle = '#ffffff'; ctx.fillRect(-neckW*0.35, -BH/2 - 2*UNIT, neckW*0.7, 4*UNIT); ctx.fillStyle = 'rgba(255,255,255,.85)'; const labelH = bodyH*0.34; const labelY = -BH/2 + neckH + bodyH*0.38; roundRect(ctx, -bodyW*0.44, labelY, bodyW*0.88, labelH, Math.max(4*UNIT, BW*0.08), true, false); ctx.restore(); }
-    function drawBottle(x, y, bw, bh){ const neckH = bh*0.28, bodyH = bh-neckH, neckW = bw*0.55, bodyW = bw; ctx.fillStyle = '#f2c14e'; roundRect(ctx, x - bodyW/2, y + neckH, bodyW, bodyH, 3*UNIT, true, false); ctx.fillStyle = '#d4a64c'; roundRect(ctx, x - neckW/2, y, neckW, neckH, 2*UNIT, true, false); ctx.fillStyle = '#ffffff'; ctx.fillRect(x - neckW*0.4, y - 2*UNIT, neckW*0.8, 3*UNIT); ctx.fillStyle = 'rgba(255,255,255,.85)'; const labelH = bodyH*0.35; const labelY = y + neckH + bodyH*0.35; roundRect(ctx, x - bodyW/2, labelY, bodyW*0.8, labelH, 3*UNIT, true, false); }
-
-    function drawMelonWithWings(cx, cy, r, t, rot){ ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot*0.4); const flap = Math.sin(t)*0.5 + 0.5; const wingSpan = r*1.6; ctx.fillStyle = '#f9f9f9'; for(const s of [-1,1]){ ctx.save(); ctx.scale(s,1); ctx.rotate((-0.6 + flap*0.9) * s); wingPath(wingSpan, r*0.7); ctx.fill(); ctx.restore(); } const rx = r*1.25, ry = r*0.9; const grad = ctx.createRadialGradient(0,0,r*0.3, 0,0,Math.max(rx,ry)); grad.addColorStop(0,'#9efc86'); grad.addColorStop(1,'#1e7d3f'); ctx.fillStyle = grad; ctx.beginPath(); ctx.ellipse(0,0,rx,ry,0,0,Math.PI*2); ctx.fill(); ctx.save(); ctx.clip(); ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = Math.max(1, r*0.12); for(let i=0;i<6;i++){ ctx.beginPath(); ctx.ellipse(0,0,rx*0.96, ry*0.96, 0, i*Math.PI/3, i*Math.PI/3 + Math.PI/14); ctx.stroke(); } ctx.restore(); ctx.fillStyle = '#0b1020'; ctx.beginPath(); ctx.arc(rx*0.35, -ry*0.1, r*0.12, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(-rx*0.35, -ry*0.1, r*0.12, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = '#0b1020'; ctx.lineWidth = Math.max(2, r*0.08); ctx.beginPath(); ctx.arc(0, ry*0.1, r*0.45, 0.15*Math.PI, 0.85*Math.PI); ctx.stroke(); ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.ellipse(-rx*0.35, -ry*0.3, r*0.12, r*0.09, 0, 0, Math.PI*2); ctx.fill(); ctx.restore(); }
-    function wingPath(w, h){ ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(w*0.2, -h*0.6, w*0.6, -h*0.2); ctx.quadraticCurveTo(w*0.9, 0, w*0.6, h*0.2); ctx.quadraticCurveTo(w*0.2, h*0.6, 0, 0); }
-    function roundRect(ctx, x, y, w, h, r, fill, stroke){ if(w<2*r) r=w/2; if(h<2*r) r=h/2; ctx.beginPath(); ctx.moveTo(x+r, y); ctx.arcTo(x+w, y,   x+w, y+h, r); ctx.arcTo(x+w, y+h, x,   y+h, r); ctx.arcTo(x,   y+h, x,   y,   r); ctx.arcTo(x,   y,   x+w, y,   r); ctx.closePath(); if(fill) ctx.fill(); if(stroke) ctx.stroke(); }
-    function checkCollision(){ for(const p of pipes){ const x1 = p.x, x2 = p.x + PIPE_W; const gapTop = p.gapY - PIPE_GAP/2; const gapBotY = p.gapY + PIPE_GAP/2; const circleX = player.x, circleY = player.y, r = player.r; if(circleX + r > x1 && circleX - r < x2){ if(circleY - r < gapTop || circleY + r > gapBotY){ return true; } } } if(player.y - player.r < 0){ player.y = player.r; player.vy = 0; } return false; }
-
-    function loadLB(){ try { return JSON.parse(localStorage.getItem(LB_KEY) || '[]'); } catch(e){ return []; } }
-    function saveLB(arr){ localStorage.setItem(LB_KEY, JSON.stringify(arr.slice(0,50))); }
-    function addToLB(name, score){ const list = loadLB(); list.push({name:name.trim().slice(0,18)||'Anónimo', score, ts:Date.now()}); list.sort((a,b)=> b.score - a.score || a.ts - b.ts); saveLB(list); return list.slice(0,10); }
-    function renderLB(){ const list = loadLB().slice(0,10); const toHTML = (arr) => arr.map((e,i)=>`<li>${escapeHtml(e.name)} — <strong>${e.score}</strong></li>`).join(''); $lbList.innerHTML = toHTML(list); $lbHome.innerHTML = toHTML(list); }
-    function escapeHtml(str){ return str.replace(/[&<>"']/g, s=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[s])); }
-    function saveScore(){ const name = $playerName.value || ''; if(!name.trim()){ $playerName.focus(); return; } localStorage.setItem(NAME_KEY, name.trim()); const top10 = addToLB(name, score); renderLB(); }
-
-    async function postScore(name, score){ const POST_URL = ''; if(!POST_URL) return; try{ await fetch(POST_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({room:ROOM, name, score}) }); }catch(err){ console.warn('No se pudo enviar el score global:', err); } }
-
-    const btn = (id, fn) => { const el = $(id); if(!el) return; const h = (e)=>{ e.preventDefault?.(); e.stopPropagation?.(); fn(e); }; ['click','pointerdown','touchstart','mousedown'].forEach(ev=> el.addEventListener(ev, h, {passive:false})); };
-    btn('btnStart', start);
-    btn('btnRetry', ()=>{ state=STATE.READY; show($ready); hide($over); });
-    btn('btnSave', saveScore);
-    btn('btnHow', ()=>{ $('how').classList.toggle('hidden'); });
-
+    // ---------- helpers DOM ----------
+    var $ = function(id){ return document.getElementById(id); };
     function show(el){ el.classList.remove('hidden'); }
     function hide(el){ el.classList.add('hidden'); }
     function randBetween(a,b){ return a + Math.random()*(b-a); }
-    function assert(name, cond){ if(cond){ console.log('✅', name); } else { console.error('❌', name); } }
-    function runTests(){ try{ assert('start existe', typeof start==='function'); assert('drawMelonWithWings existe', typeof drawMelonWithWings==='function'); assert('wingPath existe', typeof wingPath==='function'); const prevState = state; start(); assert('state = PLAYING tras start()', state===STATE.PLAYING); gameOver(); assert('state = OVER tras gameOver()', state===STATE.OVER); state = prevState; hide($over); show($ready); const backup = localStorage.getItem(LB_KEY); localStorage.setItem(LB_KEY, '[]'); addToLB('B', 2); addToLB('A', 10); addToLB('C', 7); const list = loadLB(); assert('leaderboard top = 10', list[0]?.score===10); if(backup!==null) localStorage.setItem(LB_KEY, backup); else localStorage.removeItem(LB_KEY); try { draw(); assert('draw() no lanza', true); } catch(e){ assert('draw() no lanza', false); } }catch(e){ console.error('Tests error:', e); } }
 
-    player.reset(); renderLB(); draw(); requestAnimationFrame((t)=>{ lastT=t; tick(t); });
+    // ---------- canvas ----------
+    var canvas = $('game');
+    var ctx = canvas.getContext('2d');
+
+    var $ready = $('screen-ready');
+    var $over = $('screen-over');
+    var $scoreLive = $('scoreLive');
+    var $finalScore = $('finalScore');
+    var $bestScore = $('bestScore');
+    var $lbHome = $('lbHome');
+    var $lbList = $('lbList');
+    var $lbGlobalHome = $('lbGlobalHome');
+    var $lbGlobal = $('lbGlobal');
+    var $playerName = $('playerName');
+    var $roomLabel = $('roomLabel');
+
+    var params = new URLSearchParams(location.search);
+    var ROOM = (params.get('room') || 'default').toLowerCase();
+    $roomLabel.textContent = ROOM;
+
+    var LB_KEY = 'flapmelon_lb_'+ROOM;
+    var NAME_KEY = 'flapmelon_name_'+ROOM;
+
+    var W=0,H=0,DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+    var GROUND_H=0, UNIT=1;
+
+    function resize(){
+      W = window.innerWidth; H = window.innerHeight;
+      DPR = Math.max(1, Math.min(2, window.devicePixelRatio||1));
+      canvas.width = Math.floor(W*DPR);
+      canvas.height = Math.floor(H*DPR);
+      canvas.style.width = W+'px'; canvas.style.height = H+'px';
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+      UNIT = Math.max(0.7, Math.min(1.4, Math.min(W,H)/900));
+      GROUND_H = 80*UNIT;
+    }
+    resize();
+    window.addEventListener('resize', function(){ resize(); if(state!==STATE.PLAYING) draw(); });
+
+    var STATE = { READY:0, PLAYING:1, OVER:2 };
+    var state = STATE.READY;
+
+    var player = {
+      x:0, y:0, r:18, vy:0, rot:0, wingT:0, lastFlapT:0, flapCombo:0,
+      reset:function(){ this.x=W*0.3; this.y=H*0.45; this.vy=0; this.rot=0; this.r=18*UNIT; this.flapCombo=0; this.lastFlapT=0; },
+      flap:function(now){
+        var t = (typeof now==='number'? now : performance.now());
+        if(t - this.lastFlapT <= COMBO_WINDOW*1000) this.flapCombo = Math.min(this.flapCombo+1, MAX_COMBO);
+        else this.flapCombo = 0;
+        this.lastFlapT = t;
+        this.vy = FLAP_BASE + this.flapCombo*FLAP_STEP;
+      },
+      update:function(dt){ this.vy += GRAV*dt; this.y += this.vy; this.rot = Math.atan2(this.vy, 200*UNIT); this.wingT += dt*10; },
+      draw:function(){ drawMelonWithWings(this.x,this.y,this.r,this.wingT,this.rot); }
+    };
+
+    var pipes=[];
+    var PIPE_W=64, PIPE_GAP=240, PIPE_SPD=180, PIPE_SPACING=300;
+
+    var FLAP_BASE=-3.9*UNIT, FLAP_STEP=-1.2*UNIT, MAX_COMBO=3;
+    var COMBO_WINDOW=0.45, GRAV=18*UNIT;
+
+    function tuneByScale(){ PIPE_W=64*UNIT; PIPE_GAP=240*UNIT; PIPE_SPD=180*UNIT; PIPE_SPACING=300*UNIT; GRAV=18*UNIT; FLAP_BASE=-3.9*UNIT; FLAP_STEP=-1.2*UNIT; player.r=18*UNIT; }
+    tuneByScale();
+
+    function resetPipes(){ pipes.length=0; var x=W*1.1; for(var i=0;i<4;i++){ var gapY=randBetween(H*0.28,H*0.72); pipes.push({x:x, gapY:gapY, scored:false}); x+=PIPE_SPACING; } }
+    function addPipeAt(x){ var gy=randBetween(H*0.28,H*0.72); pipes.push({x:x, gapY:gy, scored:false}); }
+
+    var score=0, best=Number(localStorage.getItem('flapmelon_best_'+ROOM)||0);
+    var lastT=performance.now(), savedThisOver=false;
+
+    function onPress(){ if(state===STATE.READY){ start(); } else if(state===STATE.PLAYING){ player.flap(performance.now()); } }
+    window.addEventListener('pointerdown', function(e){ var el=e.target; if(el && el.closest && el.closest('.panel')) return; onPress(); });
+    window.addEventListener('keydown', function(e){ if(['Space','ArrowUp','KeyW'].indexOf(e.code)>=0){ if(e.preventDefault) e.preventDefault(); onPress(); } if(state===STATE.OVER && e.code==='Enter'){ saveScore(); } });
+
+    function tick(now){ var dt=Math.min(0.032,(now-lastT)/1000); lastT=now; if(state===STATE.PLAYING){ update(dt); draw(); requestAnimationFrame(tick); } else { draw(); requestAnimationFrame(tick); } }
+    function start(){ state=STATE.PLAYING; hide($ready); hide($over); resize(); tuneByScale(); player.reset(); resetPipes(); score=0; updateScoreHUD(); }
+    function gameOver(){ state=STATE.OVER; show($over); hide($ready); savedThisOver=false; $finalScore.textContent=String(score); if(score>best){ best=score; localStorage.setItem('flapmelon_best_'+ROOM,String(best)); } $bestScore.textContent=String(best); $playerName.value=localStorage.getItem(NAME_KEY)||''; renderLB(); loadGlobalLB(); setTimeout(function(){ $playerName.focus(); },50); }
+
+    function update(dt){
+      player.update(dt);
+      for(var i=0;i<pipes.length;i++){ pipes[i].x -= PIPE_SPD*dt; }
+      if(pipes.length && pipes[0].x + PIPE_W < -20){ pipes.shift(); var last=pipes[pipes.length-1]; addPipeAt(last.x + PIPE_SPACING); }
+      for(var j=0;j<pipes.length;j++){ var p=pipes[j]; if(!p.scored && player.x > p.x + PIPE_W){ p.scored=true; score++; updateScoreHUD(); } }
+      if(checkCollision()){ gameOver(); }
+      if(player.y + player.r >= H - GROUND_H){ player.y = H - GROUND_H - player.r; gameOver(); }
+    }
+    function updateScoreHUD(){ $scoreLive.textContent='Puntos: '+score; }
+
+    function draw(){ ctx.clearRect(0,0,W,H); drawBackground(); drawGround(); for(var i=0;i<pipes.length;i++){ var p=pipes[i]; drawColumn(p.x,0,PIPE_W,p.gapY-PIPE_GAP/2,true); drawColumn(p.x,p.gapY+PIPE_GAP/2,PIPE_W,(H-GROUND_H)-(p.gapY+PIPE_GAP/2),false); } player.draw(); }
+
+    function drawBackground(){ ctx.save(); ctx.globalAlpha=0.15; var step=64*UNIT; for(var y=step;y<H;y+=step){ for(var x=step;x<W;x+=step){ ctx.fillStyle='#ffffff'; ctx.fillRect(x,y,1,1); } } ctx.restore(); }
+    function drawGround(){ var y=H-GROUND_H; ctx.fillStyle='#0e1a34'; ctx.fillRect(0,y,W,GROUND_H); ctx.strokeStyle='rgba(255,255,255,.12)'; ctx.beginPath(); ctx.moveTo(0,y+0.5); ctx.lineTo(W,y+0.5); ctx.stroke(); }
+
+    function drawColumn(x,y,w,h,top){ if(h<=0) return; ctx.save(); ctx.fillStyle='#17325e'; ctx.fillRect(x,y,w,h); var padX=Math.max(4*UNIT,w*0.12); var padY=Math.max(4*UNIT,h*0.06); var bx=x+padX, by=y+padY; var bw=Math.max(12*UNIT,w-padX*2); var bh=Math.max(24*UNIT,h-padY*2); drawBottleInRect(bx,by,bw,bh,top); ctx.strokeStyle='rgba(255,255,255,.12)'; ctx.strokeRect(x+0.5,y+0.5,w-1,h-1); ctx.restore(); }
+    function drawBottleInRect(x,y,w,h,invert){ ctx.save(); ctx.translate(x+w/2,y+h/2); if(invert){ ctx.rotate(Math.PI); } var BW=w,BH=h; var neckH=BH*0.28, bodyH=BH-neckH; var neckW=BW*0.42, bodyW=BW*0.72; ctx.fillStyle='#f2c14e'; roundRect(ctx,-bodyW/2,-BH/2+neckH,bodyW,bodyH,Math.max(4*UNIT,BW*0.08),true,false); ctx.fillStyle='#d4a64c'; roundRect(ctx,-neckW/2,-BH/2,neckW,neckH,Math.max(3*UNIT,BW*0.06),true,false); ctx.fillStyle='#ffffff'; ctx.fillRect(-neckW*0.35,-BH/2-2*UNIT,neckW*0.7,4*UNIT); ctx.fillStyle='rgba(255,255,255,.85)'; var labelH=bodyH*0.34; var labelY=-BH/2+neckH+bodyH*0.38; roundRect(ctx,-bodyW*0.44,labelY,bodyW*0.88,labelH,Math.max(4*UNIT,BW*0.08),true,false); ctx.restore(); }
+
+    function drawMelonWithWings(cx,cy,r,t,rot){ ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot*0.4); var flap=Math.sin(t)*0.5+0.5; var wingSpan=r*1.6; ctx.fillStyle='#f9f9f9'; for(var s=-1; s<=1; s+=2){ ctx.save(); ctx.scale(s,1); ctx.rotate((-0.6 + flap*0.9) * s); wingPath(wingSpan, r*0.7); ctx.fill(); ctx.restore(); } var rx=r*1.25, ry=r*0.9; var grad=ctx.createRadialGradient(0,0,r*0.3, 0,0,Math.max(rx,ry)); grad.addColorStop(0,'#9efc86'); grad.addColorStop(1,'#1e7d3f'); ctx.fillStyle=grad; ctx.beginPath(); ctx.ellipse(0,0,rx,ry,0,0,Math.PI*2); ctx.fill(); ctx.save(); ctx.clip(); ctx.strokeStyle='rgba(0,0,0,.25)'; ctx.lineWidth=Math.max(1,r*0.12); for(var i2=0;i2<6;i2++){ ctx.beginPath(); ctx.ellipse(0,0,rx*0.96,ry*0.96,0,i2*Math.PI/3,i2*Math.PI/3+Math.PI/14); ctx.stroke(); } ctx.restore(); ctx.fillStyle='#0b1020'; ctx.beginPath(); ctx.arc(rx*0.35,-ry*0.1,r*0.12,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(-rx*0.35,-ry*0.1,r*0.12,0,Math.PI*2); ctx.fill(); ctx.strokeStyle='#0b1020'; ctx.lineWidth=Math.max(2,r*0.08); ctx.beginPath(); ctx.arc(0,ry*0.1,r*0.45,0.15*Math.PI,0.85*Math.PI); ctx.stroke(); ctx.fillStyle='rgba(255,255,255,.6)'; ctx.beginPath(); ctx.ellipse(-rx*0.35,-ry*0.3,r*0.12,r*0.09,0,0,Math.PI*2); ctx.fill(); ctx.restore(); }
+    function wingPath(w,h){ ctx.beginPath(); ctx.moveTo(0,0); ctx.quadraticCurveTo(w*0.2,-h*0.6,w*0.6,-h*0.2); ctx.quadraticCurveTo(w*0.9,0,w*0.6,h*0.2); ctx.quadraticCurveTo(w*0.2,h*0.6,0,0); }
+    function roundRect(ctx,x,y,w,h,r,fill,stroke){ if(w<2*r) r=w/2; if(h<2*r) r=h/2; ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,  x+w,y+h,r); ctx.arcTo(x+w,y+h,x,  y+h,r); ctx.arcTo(x,  y+h,x,  y,  r); ctx.arcTo(x,  y,  x+w,y,  r); ctx.closePath(); if(fill) ctx.fill(); if(stroke) ctx.stroke(); }
+    function checkCollision(){ for(var i=0;i<pipes.length;i++){ var p=pipes[i], x1=p.x, x2=p.x+PIPE_W, gapTop=p.gapY-PIPE_GAP/2, gapBotY=p.gapY+PIPE_GAP/2, cx=player.x, cy=player.y, r=player.r; if(cx + r > x1 && cx - r < x2){ if(cy - r < gapTop || cy + r > gapBotY){ return true; } } } if(player.y - player.r < 0){ player.y = player.r; player.vy = 0; } return false; }
+
+    function loadLB(){ try{ return JSON.parse(localStorage.getItem(LB_KEY)||'[]'); }catch(e){ return []; } }
+    function saveLB(arr){ localStorage.setItem(LB_KEY, JSON.stringify(arr.slice(0,50))); }
+    function addToLB(name,score){ var list=loadLB(); list.push({name:(name||'').trim().slice(0,18)||'Anónimo', score:score, ts:Date.now()}); list.sort(function(a,b){ return (b.score-a.score) || (a.ts-b.ts); }); saveLB(list); return list.slice(0,10); }
+    function renderLB(){ var list=loadLB().slice(0,10); var html=list.map(function(e){ return '<li>'+escapeHtml(e.name)+' — <strong>'+e.score+'</strong></li>'; }).join(''); $lbList.innerHTML=html; $lbHome.innerHTML=html; }
+    function escapeHtml(str){ return String(str).replace(/[&<>"']/g,function(s){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'})[s]; }); }
+
+    function saveScore(){ if(savedThisOver) return; savedThisOver=true; var name=$playerName.value||''; if(!name.trim()){ $playerName.focus(); return; } localStorage.setItem(NAME_KEY,name.trim()); addToLB(name,score); renderLB(); postScore(name,score).then(loadGlobalLB).catch(function(){}); }
+
+    // ---------- Supabase (ranking global) ----------
+    var SUPABASE_URL  = 'https://cwuihgmawqboxricojoq.supabase.co';
+    var SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN3dWloZ21hd3Fib3hyaWNvam9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ4NTAyMTUsImV4cCI6MjA3MDQyNjIxNX0.8-BRtyXvUIPRB-WOeRvuwzLkSPeq_9egO-A2UvSe3kE';
+    var _sb=null;
+    function getSupabase(){
+      if(_sb) return Promise.resolve(_sb);
+      if(!SUPABASE_URL || !SUPABASE_ANON) return Promise.resolve(null);
+      return import('https://esm.sh/@supabase/supabase-js@2').then(function(mod){
+        _sb = mod.createClient(SUPABASE_URL, SUPABASE_ANON);
+        return _sb;
+      });
+    }
+    function postScore(name,score){
+      return getSupabase().then(function(sb){ if(!sb) return; return sb.from('flap_scores').insert({ room: ROOM, name: (name||'').trim().slice(0,18), score: Number(score)||0 }); }).catch(function(err){ console.warn('postScore fail', err); });
+    }
+    function loadGlobalLB(){
+      return getSupabase().then(function(sb){ if(!sb) return; return sb.from('flap_scores').select('name,score,created_at').eq('room',ROOM).order('score',{ascending:false}).order('created_at',{ascending:true}).limit(10); }).then(function(res){ if(!res||res.error) return; var data=res.data||[]; var html=data.map(function(e){ return '<li>'+escapeHtml(e.name)+' — <strong>'+e.score+'</strong></li>'; }).join(''); if($lbGlobal) $lbGlobal.innerHTML=html; if($lbGlobalHome) $lbGlobalHome.innerHTML=html; }).catch(function(err){ console.warn('loadGlobalLB fail', err); });
+    }
+
+    // ---------- UI wiring ----------
+    function bindBtn(id, fn){ var el=$(id); if(!el) return; var last=0; var h=function(e){ if(e && e.preventDefault) e.preventDefault(); if(e && e.stopPropagation) e.stopPropagation(); var now=performance.now(); if(now-last<250) return; last=now; fn(e); }; ['click','pointerdown','touchstart','mousedown'].forEach(function(ev){ el.addEventListener(ev,h,{passive:false}); }); }
+    bindBtn('btnStart', start);
+    bindBtn('btnRetry', function(){ state=STATE.READY; show($ready); hide($over); });
+    bindBtn('btnSave', saveScore);
+    bindBtn('btnHow', function(){ $('how').classList.toggle('hidden'); });
+
+    // Delegación global redundante para asegurar arranque
+    window._startGame = start;
+    document.addEventListener('click', function(e){ var t=e.target && e.target.closest && e.target.closest('[data-action="start"]'); if(t){ if(e.preventDefault) e.preventDefault(); start(); } }, {passive:false});
+    document.addEventListener('touchstart', function(e){ var t=e.target && e.target.closest && e.target.closest('[data-action="start"]'); if(t){ if(e.preventDefault) e.preventDefault(); start(); } }, {passive:false});
+
+    // ---------- tests ----------
+    function assert(name,cond){ if(cond){ console.log('✅',name); } else { console.error('❌',name); } }
+    function runTests(){
+      try{
+        assert('start existe', typeof start==='function');
+        assert('drawMelonWithWings existe', typeof drawMelonWithWings==='function');
+        assert('wingPath existe', typeof wingPath==='function');
+        var prev = state;
+        state = STATE.READY; onPress(); assert('onPress desde READY inicia juego', state===STATE.PLAYING);
+        gameOver(); assert('tras gameOver estado OVER', state===STATE.OVER);
+        state = prev; hide($over); show($ready);
+        var backup = localStorage.getItem(LB_KEY);
+        localStorage.setItem(LB_KEY,'[]');
+        addToLB('B',2); addToLB('A',10); addToLB('C',7);
+        var list = loadLB();
+        assert('leaderboard top = 10', list[0] && list[0].score===10);
+        if(backup!==null) localStorage.setItem(LB_KEY,backup); else localStorage.removeItem(LB_KEY);
+        try{ draw(); assert('draw() no lanza', true); } catch(e){ assert('draw() no lanza', false); }
+      }catch(e){ console.error('Tests error:', e); }
+    }
+
+    // ---------- start loop ----------
+    player.reset(); renderLB(); loadGlobalLB(); draw(); requestAnimationFrame(function(t){ lastT=t; tick(t); });
     runTests();
   })();
   </script>
