@@ -1,0 +1,539 @@
+!DOCTYPE html
+html lang=es
+head
+  meta charset=utf-8 
+  meta name=viewport content=width=device-width, initial-scale=1, viewport-fit=cover 
+  titleFlappy Melón 🍈🍺title
+  style
+    root{--bg#0b1020;--fg#eef3ff;--accent#5cf2a1;--muted#8aa0c7;--danger#ff6b6b}
+    {box-sizingborder-box}
+    html,body{height100%}
+    body{margin0;backgroundlinear-gradient(180deg,#0b1020 0%, #152348 70%, #1a2a55 100%);colorvar(--fg);font-familysystem-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica Neue,Arial,sans-serif;overflowhidden}
+    #game{positionfixed;inset0;displayblock}
+    .hud{positionfixed;inset0;pointer-eventsnone;}
+    .scoreLive{positionabsolute;top14px;left14px;backgroundrgba(0,0,0,.35);backdrop-filterblur(4px);padding.5rem .75rem;border-radius12px;font-weight700;letter-spacing.5px}
+    .badge{displayinline-flex;align-itemscenter;gap.4rem;backgroundrgba(255,255,255,.08);border1px solid rgba(255,255,255,.12);padding.25rem .5rem;border-radius999px;font-size.8rem;colorvar(--muted)}
+    .screen{positionabsolute;inset0;displayflex;align-itemscenter;justify-contentcenter;padding24px}
+    .panel{pointer-eventsauto;max-width560px;widthmin(92vw,680px);backgroundrgba(10,14,30,.7);border1px solid rgba(255,255,255,.12);border-radius20px;box-shadow0 10px 40px rgba(0,0,0,.45);padding18px}
+    .panel h1{margin.2rem 0 0;font-sizeclamp(1.6rem,4vw,2.4rem);line-height1.1}
+    .panel p{colorvar(--muted);margin.4rem 0 .9rem}
+    .row{displayflex;gap12px;flex-wrapwrap}
+    .grow{flex1}
+    input,button{fontinherit}
+    input[type=text]{width100%;padding.75rem .9rem;border-radius14px;border1px solid rgba(255,255,255,.18);backgroundrgba(255,255,255,.06);colorvar(--fg);outlinenone}
+    input[type=text]focus{border-colorvar(--accent);box-shadow0 0 0 3px rgba(92,242,161,.15)}
+    button{padding.75rem 1rem;border-radius14px;border1px solid rgba(255,255,255,.18);backgroundlinear-gradient(180deg,#2f855a,#276749);colorwhite;cursorpointer}
+    button.ghost{backgroundrgba(255,255,255,.06);colorvar(--fg)}
+    button.warn{backgroundlinear-gradient(180deg,#b83b3b,#a12f2f)}
+    .grid{displaygrid;grid-template-columns1fr auto;gap.75rem;align-itemscenter}
+    ol{margin.4rem 0 0;padding-left1.2rem}
+    li{padding.15rem 0}
+    .tiny{font-size.8rem;colorvar(--muted)}
+    .hidden{displaynone}
+    .center{text-aligncenter}
+      .byline{font-weight700;font-sizeclamp(.9rem,2.2vw,1.1rem);colorvar(--muted);margin-left.5rem;white-spacenowrap}
+  style
+head
+body
+  canvas id=gamecanvas
+  div class=hud
+    div class=scoreLive badge id=scoreLivePuntos 0div
+
+    !-- Ready Screen --
+    div id=screen-ready class=screen
+      div class=panel
+        div class=row style=justify-contentspace-between;align-itemscenter
+          span class=badgeSala strong id=roomLabeldefaultstrongspan
+          span class=badgeTap  Clic  Espacio para saltarspan
+        div
+        h1Flappy span style=color#9efc86Melónspan span class=bylinepor Coeto Games 🚀spanh1
+        pMantén al melón con alas en el aire y pasa entre columnas de botellines. Partidas de 30–60s. ¡Fácil de aprender, cab de dominar!p
+        div class=row
+          button id=btnStart class=growJugarbutton
+          button id=btnHow class=ghostCómo jugarbutton
+        div
+        div id=how class=hidden
+          pControles pulsa para subir (o barra espaciadora). Ganas +1 punto por cada par de botellines superado. Chocar con un botellín o el suelo = game over.p
+          p class=tinyConsejo los near‑miss (pasar muy justo) no dan puntos extra… pero sí respeto.p
+        div
+        hr style=border-colorrgba(255,255,255,.1)
+        div
+          strongRanking local (top 10)strong
+          ol id=lbHomeol
+        div
+      div
+    div
+
+    !-- Game Over Screen --
+    div id=screen-over class=screen hidden
+      div class=panel
+        h1¡Has palmado! 💥h1
+        pTu puntuación strong id=finalScore0strong — Récord strong id=bestScore0strongp
+        div class=grid style=margin.5rem 0 1rem
+          input id=playerName type=text maxlength=18 placeholder=Tu nombre o peña 
+          button id=btnSaveGuardarbutton
+        div
+        div class=row
+          button id=btnRetry class=growJugar de nuevobutton
+        div
+        div style=margin-top1rem
+          strongRanking local (top 10)strong
+          ol id=lbListol
+          p class=tinyEl ranking se guarda en este dispositivo. Para un ranking compartido de evento, te dejo un hook para Supabase en el código (opcional).
+          p
+        div
+      div
+    div
+  div
+
+  script
+   Flappy Melón — Juego Canvas sin dependencias
+   Autor tú + ChatGPT. Copia este archivo como index.html y ábrelo en el navegador.
+   Bonus Usa room=NOMBRE en la URL para separar rankings locales por sala (ej room=GUADA25)
+   Opcional (evento) ver función postScore() para integrar con una API (p.ej. Supabase Edge Function)
+  (() = {
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const $ = (id) = document.getElementById(id);
+    const $ready = $('screen-ready');
+    const $over = $('screen-over');
+    const $scoreLive = $('scoreLive');
+    const $finalScore = $('finalScore');
+    const $bestScore = $('bestScore');
+    const $lbHome = $('lbHome');
+    const $lbList = $('lbList');
+    const $playerName = $('playerName');
+    const $roomLabel = $('roomLabel');
+
+    const params = new URLSearchParams(location.search);
+    const ROOM = (params.get('room')  'default').toLowerCase();
+    $roomLabel.textContent = ROOM;
+
+     Storage keys por sala
+    const LB_KEY = `flapmelon_lb_${ROOM}`;
+    const NAME_KEY = `flapmelon_name_${ROOM}`;
+
+     Mundo y escalado
+    let W = 0, H = 0, DPR = Math.max(1, Math.min(2, window.devicePixelRatio  1));
+    let GROUND_H = 0;  altura suelo visible
+    let UNIT = 1;  escala base
+
+    function resize() {
+      W = window.innerWidth; H = window.innerHeight;
+      DPR = Math.max(1, Math.min(2, window.devicePixelRatio  1));
+      canvas.width = Math.floor(W  DPR);
+      canvas.height = Math.floor(H  DPR);
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      UNIT = Math.max(0.7, Math.min(1.4, Math.min(W, H)  900));
+      GROUND_H = 80  UNIT;
+    }
+    resize();
+    window.addEventListener('resize', () = { resize(); if(state!==STATE.PLAYING) draw(); });
+
+     Estado de juego
+    const STATE = { READY0, PLAYING1, OVER2 };
+    let state = STATE.READY;
+
+     Jugador (melón con alas)
+    const player = {
+      x 0, y 0, r 18, vy 0, rot 0, wingT 0, lastFlapT 0, flapCombo 0,
+      reset(){
+        this.x = W0.3; this.y = H0.45; this.vy = 0; this.rot = 0; this.r = 18UNIT; this.flapCombo = 0; this.lastFlapT = 0;
+      },
+      flap(now){
+        const t = (typeof now==='number'  now  performance.now());
+        if (t - this.lastFlapT = COMBO_WINDOW1000) {
+          this.flapCombo = Math.min(this.flapCombo + 1, MAX_COMBO);
+        } else {
+          this.flapCombo = 0;
+        }
+        this.lastFlapT = t;
+        const vyTarget = FLAP_BASE + this.flapCombo  FLAP_STEP;  valores negativos
+        this.vy = vyTarget;
+      },
+      update(dt){
+        this.vy += GRAV  dt;  gravedad
+        this.y += this.vy;
+        this.rot = Math.atan2(this.vy, 200UNIT);  inclinación ligera
+        this.wingT += dt10;  anim de alas
+      },
+      draw(){ drawMelonWithWings(this.x, this.y, this.r, this.wingT, this.rot); }
+    };
+
+     Obstáculos (columnas de botellines)
+    const pipes = [];
+    let PIPE_W = 64;      ancho columna
+    let PIPE_GAP = 240;   hueco
+    let PIPE_SPD = 180;   pxs
+    let PIPE_SPACING = 300;  separación horizontal
+
+     Flap combo y física ajustable
+    let FLAP_BASE = -3.9UNIT, FLAP_STEP = -1.2UNIT, MAX_COMBO = 3;  valores negativos
+    const COMBO_WINDOW = 0.45;  s para encadenar toques
+    const COMBO_RESET = 0.55;  s referencia (se usa en siguiente toque)
+    let GRAV = 18UNIT;
+
+    function tuneByScale(){
+      PIPE_W = 64UNIT; PIPE_GAP = 240UNIT; PIPE_SPD = 180UNIT; PIPE_SPACING = 300UNIT;
+      GRAV = 18UNIT;
+      FLAP_BASE = -3.9UNIT;
+      FLAP_STEP = -1.2UNIT;
+      player.r = 18UNIT;
+    }
+    tuneByScale();
+
+    function resetPipes(){
+      pipes.length = 0;
+      let x = W1.1;
+      for(let i=0;i4;i++){
+        const gapY = randBetween(H0.28, H0.72);
+        pipes.push({x, gapY, scoredfalse});
+        x += PIPE_SPACING;
+      }
+    }
+
+    function addPipeAt(x){
+      const gapY = randBetween(H0.28, H0.72);
+      pipes.push({x, gapY, scoredfalse});
+    }
+
+     Puntuación
+    let score = 0; let best = 0; best = Number(localStorage.getItem(`flapmelon_best_${ROOM}`)  0);
+
+     Tiempo
+    let lastT = performance.now();
+
+     Entradas
+    function onPress(){
+      if(state===STATE.READY){ start(); }
+      else if(state===STATE.PLAYING){ player.flap(performance.now()); }
+      else if(state===STATE.OVER){  ignore  }
+    }
+    window.addEventListener('pointerdown', (e)={ const el=e.target; if(el && el.closest && el.closest('.panel')) return; onPress(); });
+    window.addEventListener('keydown', (e)={
+      if(['Space','ArrowUp','KeyW'].includes(e.code)){ e.preventDefault(); onPress(); }
+      if(state===STATE.OVER && e.code==='Enter'){ saveScore(); }
+    });
+
+     Loop
+    function tick(now){
+      const dt = Math.min(0.032, (now - lastT)  1000);  máx 32 ms
+      lastT = now;
+      if(state===STATE.PLAYING){ update(dt); draw(); requestAnimationFrame(tick); }
+      else { draw(); requestAnimationFrame(tick); }  seguimos dibujando para animación sutil
+    }
+
+    function start(){
+      state = STATE.PLAYING; hide($ready); hide($over);
+      resize(); tuneByScale(); player.reset(); resetPipes(); score = 0; updateScoreHUD();
+    }
+
+    function gameOver(){
+      state = STATE.OVER; show($over); hide($ready);
+      $finalScore.textContent = String(score);
+      if(scorebest){ best=score; localStorage.setItem(`flapmelon_best_${ROOM}`, String(best)); }
+      $bestScore.textContent = String(best);
+      $playerName.value = localStorage.getItem(NAME_KEY)  '';
+      renderLB();
+      setTimeout(() = { $playerName.focus(); }, 50);
+    }
+
+    function update(dt){
+      player.update(dt);
+       mover columnas
+      for(const p of pipes){ p.x -= PIPE_SPDdt; }
+       reciclar y añadir nuevas
+      if(pipes.length && pipes[0].x + PIPE_W  -20){ pipes.shift(); const last = pipes[pipes.length-1]; addPipeAt(last.x + PIPE_SPACING); }
+       puntuación
+      for(const p of pipes){
+        if(!p.scored && player.x  p.x + PIPE_W){ p.scored = true; score++; updateScoreHUD(); }
+      }
+       colisiones
+      if(checkCollision()) { gameOver(); }
+       suelo
+      if(player.y + player.r = H - GROUND_H){ player.y = H - GROUND_H - player.r; gameOver(); }
+    }
+
+    function updateScoreHUD(){ $scoreLive.textContent = `Puntos ${score}`; }
+
+    function draw(){
+      ctx.clearRect(0,0,W,H);
+      drawBackground();
+       suelo
+      drawGround();
+       columnas
+      for(const p of pipes){ drawColumn(p.x, 0, PIPE_W, p.gapY - PIPE_GAP2, true); drawColumn(p.x, p.gapY + PIPE_GAP2, PIPE_W, (H - GROUND_H) - (p.gapY + PIPE_GAP2), false); }
+       jugador
+      player.draw();
+       si estamos en startover, quizá un sutil latido del melón
+      if(state!==STATE.PLAYING){
+         restaura melón a posición fija
+      }
+    }
+
+     ===== Dibujo =====
+    function drawBackground(){
+       capa de estrellas sutiles
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      const step = 64UNIT;
+      for(let y=step; yH; y+=step){
+        for(let x=step; xW; x+=step){
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawGround(){
+      const y = H - GROUND_H;
+      ctx.fillStyle = '#0e1a34';
+      ctx.fillRect(0, y, W, GROUND_H);
+       línea de separación
+      ctx.strokeStyle = 'rgba(255,255,255,.12)';
+      ctx.beginPath();
+      ctx.moveTo(0, y+0.5);
+      ctx.lineTo(W, y+0.5);
+      ctx.stroke();
+    }
+
+     Dibuja una columna con un único botellín grande
+    function drawColumn(x, y, w, h, top){
+      if(h=0) return;
+      ctx.save();
+       fondo sutil para la zona del obstáculo
+      ctx.fillStyle = '#17325e';
+      ctx.fillRect(x, y, w, h);
+       botella única, ajustada al rectángulo
+      const padX = Math.max(4UNIT, w0.12);
+      const padY = Math.max(4UNIT, h0.06);
+      const bx = x + padX, by = y + padY;
+      const bw = Math.max(12UNIT, w - padX2);
+      const bh = Math.max(24UNIT, h - padY2);
+      drawBottleInRect(bx, by, bw, bh, top);  top = invertida
+       contorno suave
+      ctx.strokeStyle = 'rgba(255,255,255,.12)';
+      ctx.strokeRect(x+0.5, y+0.5, w-1, h-1);
+      ctx.restore();
+    }
+
+    function drawBottleInRect(x, y, w, h, invert){
+      ctx.save();
+       Centro del rect
+      ctx.translate(x + w2, y + h2);
+      if(invert){ ctx.rotate(Math.PI); }
+      const BW = w, BH = h;
+      const neckH = BH0.28, bodyH = BH - neckH;
+      const neckW = BW0.42, bodyW = BW0.72;
+       cuerpo ámbar
+      ctx.fillStyle = '#f2c14e';
+      roundRect(ctx, -bodyW2, -BH2 + neckH, bodyW, bodyH, Math.max(4UNIT, BW0.08), true, false);
+       cuello
+      ctx.fillStyle = '#d4a64c';
+      roundRect(ctx, -neckW2, -BH2, neckW, neckH, Math.max(3UNIT, BW0.06), true, false);
+       chapa
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-neckW0.35, -BH2 - 2UNIT, neckW0.7, 4UNIT);
+       etiqueta
+      ctx.fillStyle = 'rgba(255,255,255,.85)';
+      const labelH = bodyH0.34; const labelY = -BH2 + neckH + bodyH0.38;
+      roundRect(ctx, -bodyW0.44, labelY, bodyW0.88, labelH, Math.max(4UNIT, BW0.08), true, false);
+      ctx.restore();
+    }
+
+     (Antiguo) Dibujo de botella individual — lo dejamos por si lo queremos reutilizar en el futuro
+    function drawBottle(x, y, bw, bh){
+       cuerpo
+      const neckH = bh0.28, bodyH = bh-neckH, neckW = bw0.55, bodyW = bw;
+       cuerpo ámbar
+      ctx.fillStyle = '#f2c14e';
+      roundRect(ctx, x - bodyW2, y + neckH, bodyW, bodyH, 3UNIT, true, false);
+       cuello
+      ctx.fillStyle = '#d4a64c';
+      roundRect(ctx, x - neckW2, y, neckW, neckH, 2UNIT, true, false);
+       chapa
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x - neckW0.4, y - 2UNIT, neckW0.8, 3UNIT);
+       etiqueta
+      ctx.fillStyle = 'rgba(255,255,255,.85)';
+      const labelH = bodyH0.35; const labelY = y + neckH + bodyH0.35;
+      roundRect(ctx, x - bodyW0.4, labelY, bodyW0.8, labelH, 3UNIT, true, false);
+    }
+
+    function drawMelonWithWings(cx, cy, r, t, rot){
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rot0.4);
+       alas
+      const flap = Math.sin(t)0.5 + 0.5;  0..1
+      const wingSpan = r1.6;
+      ctx.fillStyle = '#f9f9f9';
+      for(const s of [-1,1]){
+        ctx.save();
+        ctx.scale(s,1);
+        ctx.rotate((-0.6 + flap0.9)  s);
+        wingPath(wingSpan, r0.7);
+        ctx.fill();
+        ctx.restore();
+      }
+       cuerpo melón tipo balón de rugby (elipse)
+      const rx = r1.25, ry = r0.9;
+      const grad = ctx.createRadialGradient(0,0,r0.3, 0,0,Math.max(rx,ry));
+      grad.addColorStop(0,'#9efc86');
+      grad.addColorStop(1,'#1e7d3f');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.ellipse(0,0,rx,ry,0,0,Math.PI2); ctx.fill();
+       rayas del melón (ligeras)
+      ctx.save();
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(0,0,0,.25)';
+      ctx.lineWidth = Math.max(1, r0.12);
+      for(let i=0;i6;i++){
+        ctx.beginPath();
+        ctx.ellipse(0,0,rx0.96, ry0.96, 0, iMath.PI3, iMath.PI3 + Math.PI14);
+        ctx.stroke();
+      }
+      ctx.restore();
+       carita sonriente
+      ctx.fillStyle = '#0b1020';
+      ctx.beginPath(); ctx.arc(rx0.35, -ry0.1, r0.12, 0, Math.PI2); ctx.fill();
+      ctx.beginPath(); ctx.arc(-rx0.35, -ry0.1, r0.12, 0, Math.PI2); ctx.fill();
+      ctx.strokeStyle = '#0b1020';
+      ctx.lineWidth = Math.max(2, r0.08);
+      ctx.beginPath(); ctx.arc(0, ry0.1, r0.45, 0.15Math.PI, 0.85Math.PI); ctx.stroke();
+       brillo
+      ctx.fillStyle = 'rgba(255,255,255,.6)';
+      ctx.beginPath(); ctx.ellipse(-rx0.35, -ry0.3, r0.12, r0.09, 0, 0, Math.PI2); ctx.fill();
+      ctx.restore();
+    }
+
+    function wingPath(w, h){
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(w0.2, -h0.6, w0.6, -h0.2);
+      ctx.quadraticCurveTo(w0.9, 0, w0.6, h0.2);
+      ctx.quadraticCurveTo(w0.2, h0.6, 0, 0);
+    }
+
+    function roundRect(ctx, x, y, w, h, r, fill, stroke){
+      if(w2r) r=w2; if(h2r) r=h2;
+      ctx.beginPath();
+      ctx.moveTo(x+r, y);
+      ctx.arcTo(x+w, y,   x+w, y+h, r);
+      ctx.arcTo(x+w, y+h, x,   y+h, r);
+      ctx.arcTo(x,   y+h, x,   y,   r);
+      ctx.arcTo(x,   y,   x+w, y,   r);
+      ctx.closePath();
+      if(fill) ctx.fill();
+      if(stroke) ctx.stroke();
+    }
+
+     ===== Colisiones =====
+    function checkCollision(){
+       contra columnas
+      for(const p of pipes){
+        const x1 = p.x, x2 = p.x + PIPE_W;
+        const gapTop = p.gapY - PIPE_GAP2;
+        const gapBotY = p.gapY + PIPE_GAP2;
+        const circleX = player.x, circleY = player.y, r = player.r;
+        if(circleX + r  x1 && circleX - r  x2){
+          if(circleY - r  gapTop  circleY + r  gapBotY){ return true; }
+        }
+      }
+       techo (opcional)
+      if(player.y - player.r  0){ player.y = player.r; player.vy = 0; }
+      return false;
+    }
+
+     ===== Leaderboard local =====
+    function loadLB(){ try { return JSON.parse(localStorage.getItem(LB_KEY)  '[]'); } catch(e){ return []; } }
+    function saveLB(arr){ localStorage.setItem(LB_KEY, JSON.stringify(arr.slice(0,50))); }
+    function addToLB(name, score){
+      const list = loadLB();
+      list.push({namename.trim().slice(0,18)'Anónimo', score, tsDate.now()});
+      list.sort((a,b)= b.score - a.score  a.ts - b.ts);
+      saveLB(list);
+      return list.slice(0,10);
+    }
+    function renderLB(){
+      const list = loadLB().slice(0,10);
+      const toHTML = (arr) = arr.map((e,i)=`li${escapeHtml(e.name)} — strong${e.score}strongli`).join('');
+      $lbList.innerHTML = toHTML(list);
+      $lbHome.innerHTML = toHTML(list);
+    }
+    function escapeHtml(str){ return str.replace([&']g, s= ({'&''&amp;','''&lt;','''&gt;','''&quot;',''''&#39;'}[s])); }
+
+    function saveScore(){
+      const name = $playerName.value  '';
+      if(!name.trim()){
+        $playerName.focus();
+        return;
+      }
+      localStorage.setItem(NAME_KEY, name.trim());
+      const top10 = addToLB(name, score);
+      renderLB();
+    }
+
+     ===== Integración API (Opcional) =====
+     Rellena POST_URL con tu endpoint (por ejemplo, una Supabase Edge Function) para ranking global.
+     El body que se envía { room, name, score }
+    async function postScore(name, score){
+      const POST_URL = ''; ej 'httpstu-proyecto.functions.supabase.coflapmelon'
+      if(!POST_URL) return;  sin configurar, no hace nada
+      try{
+        await fetch(POST_URL, { method'POST', headers{'Content-Type''applicationjson'}, body JSON.stringify({roomROOM, name, score}) });
+      }catch(err){ console.warn('No se pudo enviar el score global', err); }
+    }
+
+     ===== UI =====
+    const btn = (id, fn) = $(id).addEventListener('click', (e)={ e.stopPropagation.(); fn(e); });
+    btn('btnStart', start);
+    btn('btnRetry', ()={ state=STATE.READY; show($ready); hide($over); });
+    btn('btnSave', saveScore);
+    btn('btnHow', ()={ $('how').classList.toggle('hidden'); });
+
+    function show(el){ el.classList.remove('hidden'); }
+    function hide(el){ el.classList.add('hidden'); }
+
+     ===== Util =====
+    function randBetween(a,b){ return a + Math.random()(b-a); }
+
+     ===== Mini test suite (no intrusiva) =====
+    function assert(name, cond){ if(cond){ console.log('✅', name); } else { console.error('❌', name); } }
+    function runTests(){
+      try{
+         Test 1 funciones clave existen
+        assert('start existe', typeof start==='function');
+        assert('drawMelonWithWings existe', typeof drawMelonWithWings==='function');
+        assert('wingPath existe', typeof wingPath==='function');
+
+         Test 2 transición READY - PLAYING - OVER
+        const prevState = state;
+        start(); assert('state = PLAYING tras start()', state===STATE.PLAYING);
+        gameOver(); assert('state = OVER tras gameOver()', state===STATE.OVER);
+        state = prevState; hide($over); show($ready);
+
+         Test 3 leaderboard ordena por score desc
+        const backup = localStorage.getItem(LB_KEY);
+        localStorage.setItem(LB_KEY, '[]');
+        addToLB('B', 2); addToLB('A', 10); addToLB('C', 7);
+        const list = loadLB();
+        assert('leaderboard top = 10', list[0].score===10);
+        if(backup!==null) localStorage.setItem(LB_KEY, backup); else localStorage.removeItem(LB_KEY);
+
+         Test 4 draw no lanza
+        try { draw(); assert('draw() no lanza', true); } catch(e){ assert('draw() no lanza', false); }
+      }catch(e){ console.error('Tests error', e); }
+    }
+
+     Init
+    player.reset(); renderLB(); draw(); requestAnimationFrame((t)={ lastT=t; tick(t); });
+    runTests();
+  })();
+  script
+body
+html
